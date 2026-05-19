@@ -219,7 +219,7 @@ function distillMPC(warmstart::Bool)
     x_vals = [zeros(t_points) for tray in 1:N]
     y_vals = [zeros(t_points) for tray in 1:N]
     u_vals = []
-    nvars, ncons, total_times, nits, setup_times, sol_times, ad_times = [], [], [], [], [], [], []
+    nvars, ncons, total_times, nits, setup_times, sol_times, factor_times, ad_times = [], [], [], [], [], [], [], []
 
     # Initialize initial guesses
     xinit = ones(N)*xf  # Start value for state
@@ -242,7 +242,8 @@ function distillMPC(warmstart::Bool)
             grid_size=nsupps,
             exa_backend=CUDABackend(),
             output_file=logfile,
-            print_level = MadNLP.WARN
+            print_level = MadNLP.WARN,
+            tol=1e-8
         )
 
         # Simulate system forward & update initial condition for state
@@ -272,7 +273,8 @@ function distillMPC(warmstart::Bool)
                 grid_size=nsupps,
                 exa_backend=CUDABackend(),
                 output_file=logfile,
-                print_level=MadNLP.WARN
+                print_level=MadNLP.WARN,
+                tol=1e-8
             )
         else
             println("Warmstart solve")
@@ -287,7 +289,8 @@ function distillMPC(warmstart::Bool)
                 exa_backend=CUDABackend(),
                 output_file=logfile,
                 print_level=MadNLP.WARN,
-                mu_init = 1E-6
+                mu_init = 1E-6,
+                tol=1e-8
             )
         end
 
@@ -299,7 +302,7 @@ function distillMPC(warmstart::Bool)
         end
 
         # Get timing stats for current iteration
-        nvar, ncon, its, sol_time, ad_time = madnlp_stats(logfile)
+        nvar, ncon, its, sol_time, factor_time, ad_time = madnlp_stats(logfile)
         setup_time = total_time - sol_time
         push!(nvars, nvar)
         push!(ncons, ncon)
@@ -307,6 +310,7 @@ function distillMPC(warmstart::Bool)
         push!(nits, its)
         push!(setup_times, setup_time)
         push!(sol_times, sol_time)
+        push!(factor_times, factor_time)
         push!(ad_times, ad_time)
 
         # Simulate system forward & update initial condition for state
@@ -329,10 +333,10 @@ function distillMPC(warmstart::Bool)
     # make a table to save the results to
     its = collect(1:1:length(nvars))
     nrows = length(its)+1
-    ncols = 8
+    ncols = 9
     table = Matrix{String}(undef, nrows, ncols)
-    table[1, :] = append!(["iteration", "nvar", "ncon", "nits", "total_time", "setup_time", "solve_time", "ad_time"])
-    table[2:end, :] = string.(hcat(its, nvars, ncons, nits, total_times, setup_times, sol_times, ad_times))
+    table[1, :] = append!(["iteration", "nvar", "ncon", "nits", "total_time", "setup_time", "solve_time", "factor_time", "ad_time"])
+    table[2:end, :] = string.(hcat(its, nvars, ncons, nits, total_times, setup_times, sol_times, factor_times,ad_times))
 
     # save the matrix as a CSV
     open("$(dirname(@__DIR__))/results/OptimalControl/distill-results.csv", "w") do io

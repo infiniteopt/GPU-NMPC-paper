@@ -33,21 +33,23 @@ module Distillation
     function plotResults(tVals, xVals, yVals, uVals)
         trayVals = collect(LinRange(1, N, N))
         xset = xbar*ones(length(tVals))
+        uset = ubar*ones(length(tVals))
         xSS = last.(xVals)
 
         # Graph the results
-        l1 = @layout [a b]
-        xPlot = plot(tVals, xVals[1], label = "x1", xlabel = "Time (min)", ylabel = "Tray 1 mole fraction")
-        plot!(tVals, xset, label = "Setpoint", lw=:2)
-        yPlot = plot(tVals, yVals[N], label = "y$N", xlabel = "Time (min)", ylabel = "Tray $N mole fraction")
-        fracPlot = plot(xPlot, yPlot, layout = l1)
-        display(fracPlot)
-        savefig(joinpath(@__DIR__, "distill_System.png"))
-        uPlot = plot(tVals, uVals, label = "r", xlabel = "Time (min)", ylabel = "Reflux ratio")
+        xPlot = plot(tVals, xVals[1], label = "x1", xlabel = "Time (min)", lw=:3, ylabel = "Tray 1 mole fraction")
+        plot!(tVals, xset, label = "Setpoint", lw=:3, linestyle=:dash)
+        savefig(joinpath(@__DIR__, "distill_x1.png"))
+        display(xPlot)
+        yPlot = plot(tVals, yVals[N], label = "y$N", xlabel = "Time (min)", lw=:3, ylabel = "Tray $N mole fraction", legend = false, color="#e37048")
+        savefig(joinpath(@__DIR__, "distill_y$N.png"))
+        display(yPlot)
+        uPlot = plot(tVals, uVals, label = "r", xlabel = "Time (min)", lw=:3, ylabel = "Reflux ratio")
+        plot!(tVals, uset, label = "Setpoint", lw=:3, linestyle=:dash)
         savefig(joinpath(@__DIR__, "distill_Control.png"))
         display(uPlot)
-        trayPlot = plot(trayVals, xSS, label = "x", xlabel = "Trays", ylabel = "Mole fraction")
-        plot!(trayVals, last.(yVals), label = "y")
+        trayPlot = plot(trayVals, xSS, label = "x", xlabel = "Trays", lw=:3, ylabel = "Mole fraction")
+        plot!(trayVals, last.(yVals), label = "y", lw=:3, linestyle=:dash)
         savefig(joinpath(@__DIR__, "distill_moleFrac.png"))
         display(trayPlot)
     end
@@ -133,8 +135,9 @@ module Distillation
             end
             set_optimizer_attribute(model, "print_level", 0)
             set_optimizer_attribute(model, "file_print_level", 3)
-            set_optimizer_attribute(model, "linear_solver", "ma27")
+            set_optimizer_attribute(model, "linear_solver", "ma97")
         end
+        set_optimizer_attribute(model, "tol", 1e-8)
         set_optimizer_attribute(model, "output_file", logfile)
         set_optimizer_attribute(model, "print_timing_statistics", "yes")
         set_silent(model)
@@ -205,12 +208,12 @@ module Distillation
         # Extract timing stats & results
         if backend == "ExaModelsGPU"
             CUDA.allowscalar(true)
-            nvar, ncon, nit, sol_time, ad_time = madnlp_stats(logfile)
+            nvar, ncon, nit, sol_time, factor_time, ad_time = madnlp_stats(logfile)
         else
-            nvar, ncon, nit, sol_time, ad_time = ipopt_stats(logfile)
+            nvar, ncon, nit, sol_time, factor_time, ad_time = ipopt_stats(logfile)
         end
         setup_time += total_time - sol_time
-        time_results = [nvar, ncon, nit, total_time, setup_time, sol_time, ad_time]
+        time_results = [nvar, ncon, nit, total_time, setup_time, sol_time, factor_time, ad_time]
         uVals = value.(OCmodel[:u])
 
         return uVals[2], status, time_results, OCmodel
@@ -226,14 +229,14 @@ module Distillation
         x_vals = [zeros(t_points) for tray in 1:N]
         y_vals = [zeros(t_points) for tray in 1:N]
         u_vals = []
-        nvars, ncons, nits, total_times, setup_times, sol_times, ad_times = [], [], [], [], [], [], []
+        nvars, ncons, nits, total_times, setup_times, sol_times, factor_times, ad_times = [], [], [], [], [], [], [], []
         
         # Initialize values before MPC loop
         x_k = ones(N)*xf    # For initial conditions
-        yk = (α*x_k)./(1 .+ (α - 1)*x_k)
+        y_k = (α*x_k)./(1 .+ (α - 1)*x_k)
         for j in 1:N
             x_vals[j][1] = value(x_k[j])
-            y_vals[j][1] = value(yk[j])
+            y_vals[j][1] = value(y_k[j])
         end
         model = nothing     # For optimal control model
 
@@ -274,10 +277,6 @@ module Distillation
                 # Fix missing or invalid timing values
                 timing_k[1] = timing_k[1] == 0.0 ? (isempty(nvars) ? 0.0 : nvars[end]) : timing_k[1]
                 timing_k[2] = timing_k[2] == 0.0 ? (isempty(ncons) ? 0.0 : ncons[end]) : timing_k[2]
-                timing_k[3] = isempty(nits) ? timing_k[3] : Int(timing_k[3] - sum(nits))
-                timing_k[5] = timing_k[5] <= 0 ? 0.0 : timing_k[5]
-                timing_k[6] -= isempty(sol_times) ? 0.0 : sum(sol_times)
-                timing_k[7] -= isempty(ad_times) ? 0.0 : sum(ad_times)
             end
 
             # Update arrays with current results
@@ -288,22 +287,23 @@ module Distillation
             push!(total_times, timing_k[4])
             push!(setup_times, timing_k[5])
             push!(sol_times, timing_k[6])
-            push!(ad_times, timing_k[7])
+            push!(factor_times, timing_k[7])
+            push!(ad_times, timing_k[8])
 
             # Simulate system forward & store state values
             ti = t_vals[i]
             tspan = (ti, ti+Δt)
             x_k = distillSim(x_k, u_k, tspan)
-            yk = (α*x_k)./(1 .+ (α - 1)*x_k)
+            y_k = (α*x_k)./(1 .+ (α - 1)*x_k)
             for j in 1:N
                 x_vals[j][i] = value(x_k[j])
-                y_vals[j][i] = value(yk[j])
+                y_vals[j][i] = value(y_k[j])
             end
         end
 
         if backend in ["Ipopt", "MOI", "ExaModelsCPU"] && param_updates == true
             # Need to extract nvar, ncon, total_time and ad_time from log file
-            nvars, ncons, nits, sol_times, ad_times = ipopt_stats_all(logfile)
+            nvars, ncons, nits, sol_times, factor_times, ad_times = ipopt_stats_all(logfile)
 
             # Recalculate the model times; return 0 if negative
             setup_times = max.(total_times .- sol_times, 0.0)
@@ -317,10 +317,10 @@ module Distillation
         # Make a table to save the results to
         its = collect(1:1:length(nvars))
         nrows = length(its)+1
-        ncols = 8
+        ncols = 9
         table = Matrix{String}(undef, nrows, ncols)
-        table[1, :] = append!(["iteration", "nvar", "ncon", "nits", "total_time", "setup_time", "solve_time", "ad_time"])
-        table[2:end, :] = string.(hcat(its, nvars, ncons, nits, total_times, setup_times, sol_times, ad_times))
+        table[1, :] = append!(["iteration", "nvar", "ncon", "nits", "total_time", "setup_time", "solve_time", "factor_time","ad_time"])
+        table[2:end, :] = string.(hcat(its, nvars, ncons, nits, total_times, setup_times, sol_times, factor_times, ad_times))
         
         # Save the matrix as a CSV
         if compile == false # Skip saving results during compilation runs

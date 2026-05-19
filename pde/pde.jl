@@ -38,8 +38,12 @@ module PDE
         domain_y = (-0.5, 0.5)
 
         # Control history
-        p1 = plot(time_vals[1:length(T_bot)],  Array{Float64}([T_side T_bot T_avg T_sp]),
-                label=["Side Temperature" "Bottom Temperature" "Average Domain Temperature" "Setpoint Temperature"], xlabel="Time", ylabel="Temperature")
+        p1 = plot(time_vals[1:length(T_bot)],  T_avg,
+                label="Tavg", xlabel="Time", ylabel="Temperature", lw=:3)
+        plot!(time_vals[1:length(T_bot)], T_side, label="Tside", lw=:3, linestyle=:dot)
+        plot!(time_vals[1:length(T_bot)], T_bot, label="Tbot", lw=:3, linestyle=:dashdot)
+        plot!(time_vals[1:length(T_bot)], T_sp, label="Tsp", lw=:3, linestyle=:dash)
+        savefig(joinpath(@__DIR__, "pde_temp.png"))
         
         # Final temperature distribution
         if !isempty(T)
@@ -48,18 +52,17 @@ module PDE
             y_coords = range(-1, 1, length = N)
             
             p2 = heatmap(x_coords, y_coords, T_final',
-                        title="Final Temperature Distribution",
                         xlabel="x₁", ylabel="x₂", colorbar_title="Temperature")
             
             # Mark tracking domain
             track_x = [domain_x[1], domain_x[2], domain_x[2], domain_x[1], domain_x[1]]
             track_y = [domain_y[1], domain_y[1], domain_y[2], domain_y[2], domain_y[1]]
-            plot!(p2, track_x, track_y, lc=:red, lw=2, label="Tracking Domain", linestyle=:dash)
+            plot!(p2, track_x, track_y, lc=:white, lw=3, label="Tracking Domain", linestyle=:dash)
         end
         
-        combined_plot = plot(p1, p2, layout=(2,1), size=(800,600))
-        savefig(joinpath(@__DIR__, "pde_graph.png"))
-        display(combined_plot)
+        savefig(joinpath(@__DIR__, "pde_distrib.png"))
+        display(p1)
+        display(p2)
     end
 
     function pdeDynamics!(dT, T, p, t)
@@ -152,8 +155,9 @@ module PDE
             end
             set_optimizer_attribute(model, "print_level", 0)
             set_optimizer_attribute(model, "file_print_level", 3)
-            set_optimizer_attribute(model, "linear_solver", "ma27")
+            set_optimizer_attribute(model, "linear_solver", "ma97")
         end
+        set_optimizer_attribute(model, "tol", 1e-8)
         set_optimizer_attribute(model, "output_file", logfile)
         set_optimizer_attribute(model, "print_timing_statistics", "yes")
         set_silent(model)
@@ -228,12 +232,12 @@ module PDE
         # Extract timing stats & results
         if backend == "ExaModelsGPU"
             CUDA.allowscalar(true)
-            nvar, ncon, it, sol_time, ad_time = madnlp_stats(logfile)
+            nvar, ncon, it, sol_time, factor_time, ad_time = madnlp_stats(logfile)
         else
-            nvar, ncon, it, sol_time, ad_time = ipopt_stats(logfile)
+            nvar, ncon, it, sol_time, factor_time, ad_time = ipopt_stats(logfile)
         end
         setup_time += total_time - sol_time
-        time_results = [nvar, ncon, it, total_time, setup_time, sol_time, ad_time]
+        time_results = [nvar, ncon, it, total_time, setup_time, sol_time, factor_time, ad_time]
         Q_vals = value.(OCmodel[:Q])
         Tside_vals = 4.1*(Q_vals.^(1/3))
         Tbot_vals = sqrt.(Q_vals)
@@ -248,7 +252,7 @@ module PDE
 
         # Initialize arrays for storing results
         Tavg_vals, Tside_vals, Tbot_vals = [], [], []
-        nvars, ncons, nits, total_times, setup_times, sol_times, ad_times = [], [], [], [], [], [], []
+        nvars, ncons, nits, total_times, setup_times, sol_times, factor_times, ad_times = [], [], [], [], [], [], [], []
 
         # Initialize values before MPC loop
         T_k = fill(T_boundary, N, N)  # For initial conditions
@@ -295,10 +299,10 @@ module PDE
                 # Also fix missing or invalid timing values
                 timing_k[1] = timing_k[1] == 0.0 ? (isempty(nvars) ? 0.0 : nvars[end]) : timing_k[1]
                 timing_k[2] = timing_k[2] == 0.0 ? (isempty(ncons) ? 0.0 : ncons[end]) : timing_k[2]
-                timing_k[3] = isempty(nits) ? timing_k[3] : Int(timing_k[3] - nits[end])
-                timing_k[5] = timing_k[5] <= 0 ? 0.0 : timing_k[5]
-                timing_k[6] -= isempty(sol_times) ? 0.0 : sum(sol_times)
-                timing_k[7] -= isempty(ad_times) ? 0.0 : sum(ad_times)
+                # timing_k[3] = isempty(nits) ? timing_k[3] : Int(timing_k[3] - nits[end])
+                # timing_k[5] = timing_k[5] <= 0 ? 0.0 : timing_k[5]
+                # timing_k[6] -= isempty(sol_times) ? 0.0 : sum(sol_times)
+                # timing_k[7] -= isempty(ad_times) ? 0.0 : sum(ad_times)
             end
 
             # Update arrays with current results
@@ -310,7 +314,8 @@ module PDE
             push!(total_times, timing_k[4])
             push!(setup_times, timing_k[5])
             push!(sol_times, timing_k[6])
-            push!(ad_times, timing_k[7])
+            push!(factor_times, timing_k[7])
+            push!(ad_times, timing_k[8])
             
             # Simulate system forward (using only interior points)
             tspan = (ti, ti+Δt)
@@ -324,7 +329,7 @@ module PDE
         
         if backend in ["Ipopt", "MOI", "ExaModelsCPU"] && param_updates == true
             # Need to extract nvar, ncon, total_time and ad_time from log file
-            nvars, ncons, nits, sol_times, ad_times = ipopt_stats_all(logfile)
+            nvars, ncons, nits, sol_times, factor_times, ad_times = ipopt_stats_all(logfile)
 
             # Recalculate the model times; return 0 if negative
             setup_times = max.(total_times .- sol_times, 0.0)
@@ -338,10 +343,10 @@ module PDE
         # Make a table to save the results to
         its = collect(1:1:length(nvars))
         nrows = length(its)+1
-        ncols = 8
+        ncols = 9
         table = Matrix{String}(undef, nrows, ncols)
-        table[1, :] = append!(["iteration", "nvar", "ncon", "nits", "total_time", "setup_time", "solve_time", "ad_time"])
-        table[2:end, :] = string.(hcat(its, nvars, ncons, nits, total_times, setup_times, sol_times, ad_times))
+        table[1, :] = append!(["iteration", "nvar", "ncon", "nits", "total_time", "setup_time", "solve_time", "factor_time", "ad_time"])
+        table[2:end, :] = string.(hcat(its, nvars, ncons, nits, total_times, setup_times, sol_times, factor_times, ad_times))
         
         # Save the matrix as a CSV
         if compile == false # Skip saving results during compilation runs
