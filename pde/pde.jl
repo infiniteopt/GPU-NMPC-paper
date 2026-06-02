@@ -1,5 +1,5 @@
 module PDE
-    using InfiniteOpt, Ipopt, Plots, DifferentialEquations, LinearAlgebra, Statistics, Measures, CSV, DataFrames, DelimitedFiles
+    using InfiniteOpt, Ipopt, Plots, DifferentialEquations, LinearAlgebra, Interpolations, Statistics, Measures, CSV, DataFrames, DelimitedFiles
     using InfiniteExaModels, NLPModelsIpopt, MadNLPGPU, CUDA
     using Interpolations, Suppressor, HSL_jll
     include("../utils.jl")
@@ -184,12 +184,6 @@ module PDE
                 if param_updates == false
                     # Warmstart start values (will rebuild backend)
                     total_time += @elapsed set_start_values(OCmodel)
-                    if backend == "ExaModelsCPU"
-                        OCmodel.backend.prev_options = Dict{Symbol, Any}()
-                    end
-                    # New logfile to go with new backend
-                    logfile = replace(logfile, ".log" => "$it.log")
-                    set_optimizer_attribute(OCmodel, "output_file", logfile)
                 else
                     # Update start values without rebuilding backend
                     total_time += @elapsed warmstart_backend_start_values(OCmodel)
@@ -263,11 +257,7 @@ module PDE
         WS = warmstart ? "WS" : ""
         PU = param_updates ? "PU" : ""
         filename = "pde_$(backend)_$WS$PU.log"
-        if WS != "" && PU == ""
-            logfile = joinpath(@__DIR__, "logs", "WS", filename)
-        else
-            logfile = joinpath(@__DIR__, "logs", filename)
-        end
+        logfile = joinpath(@__DIR__, "logs", filename)
 
         # Main NMPC loop
         for i in eachindex(t_vals)
@@ -299,10 +289,6 @@ module PDE
                 # Also fix missing or invalid timing values
                 timing_k[1] = timing_k[1] == 0.0 ? (isempty(nvars) ? 0.0 : nvars[end]) : timing_k[1]
                 timing_k[2] = timing_k[2] == 0.0 ? (isempty(ncons) ? 0.0 : ncons[end]) : timing_k[2]
-                # timing_k[3] = isempty(nits) ? timing_k[3] : Int(timing_k[3] - nits[end])
-                # timing_k[5] = timing_k[5] <= 0 ? 0.0 : timing_k[5]
-                # timing_k[6] -= isempty(sol_times) ? 0.0 : sum(sol_times)
-                # timing_k[7] -= isempty(ad_times) ? 0.0 : sum(ad_times)
             end
 
             # Update arrays with current results

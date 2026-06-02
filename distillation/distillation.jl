@@ -37,19 +37,19 @@ module Distillation
         xSS = last.(xVals)
 
         # Graph the results
-        xPlot = plot(tVals, xVals[1], label = "x1", xlabel = "Time (min)", lw=:3, ylabel = "Tray 1 mole fraction")
-        plot!(tVals, xset, label = "Setpoint", lw=:3, linestyle=:dash)
+        xPlot = plot(tVals, xVals[1], label = "x1", xlabel = "Time (min)", lw=:3, ylabel = "Tray 1 mole fraction", ylims=(0.65, 0.91))
+        plot!(tVals, xset, label = "Steady-state value", lw=:3, linestyle=:dash)
         savefig(joinpath(@__DIR__, "distill_x1.png"))
         display(xPlot)
-        yPlot = plot(tVals, yVals[N], label = "y$N", xlabel = "Time (min)", lw=:3, ylabel = "Tray $N mole fraction", legend = false, color="#e37048")
+        yPlot = plot(tVals, yVals[N], label = "y$N", xlabel = "Time (min)", lw=:3, ylabel = "Tray $N mole fraction", legend = false, color="#DB5C87", ylims=(0.15, 0.52))
         savefig(joinpath(@__DIR__, "distill_y$N.png"))
         display(yPlot)
-        uPlot = plot(tVals, uVals, label = "r", xlabel = "Time (min)", lw=:3, ylabel = "Reflux ratio")
-        plot!(tVals, uset, label = "Setpoint", lw=:3, linestyle=:dash)
+        uPlot = plot(tVals, uVals, label = "r", xlabel = "Time (min)", lw=:3, ylabel = "Reflux ratio", ylims=(2.51, 2.67))
+        plot!(tVals, uset, label = "Steady-state value", lw=:3, linestyle=:dash)
         savefig(joinpath(@__DIR__, "distill_Control.png"))
         display(uPlot)
-        trayPlot = plot(trayVals, xSS, label = "x", xlabel = "Trays", lw=:3, ylabel = "Mole fraction")
-        plot!(trayVals, last.(yVals), label = "y", lw=:3, linestyle=:dash)
+        trayPlot = plot(trayVals, xSS, label = "x", xlabel = "Trays", lw=:3, ylabel = "Mole fraction", ylims=(0.0, 1.0))
+        plot!(trayVals, last.(yVals), label = "y", lw=:3, color ="#DB5C87")
         savefig(joinpath(@__DIR__, "distill_moleFrac.png"))
         display(trayPlot)
     end
@@ -99,7 +99,7 @@ module Distillation
             end
         )
         
-        @objective(model, Min, ∫((x[1] - xbar)^2 + (u - ubar)^2, t))
+        @objective(model, Min, ∫((x[1] - xbar)^2 + 0.1 * (u - ubar)^2, t))
 
         if Tc != Tp
             # Activate if control horizon Tc is different from prediction horizon Tp
@@ -165,12 +165,6 @@ module Distillation
                 if param_updates == false
                     # Warmstart start values (will rebuild backend)
                     total_time += @elapsed set_start_values(OCmodel)
-                    if backend == "ExaModelsCPU"
-                        OCmodel.backend.prev_options = Dict{Symbol, Any}()
-                    end
-                    # New logfile to go with new backend
-                    logfile = replace(logfile, ".log" => "$it.log")
-                    set_optimizer_attribute(OCmodel, "output_file", logfile)
                 else
                     # Warmstart start values without rebuilding backend
                     total_time += @elapsed warmstart_backend_start_values(OCmodel)
@@ -244,11 +238,7 @@ module Distillation
         WS = warmstart ? "WS" : ""
         PU = param_updates ? "PU" : ""
         filename = "distill_$(backend)_$WS$PU.log"
-        if WS != "" && PU == ""
-            logfile = joinpath(@__DIR__, "logs", "WS", filename)
-        else
-            logfile = joinpath(@__DIR__, "logs", filename)
-        end
+        logfile = joinpath(@__DIR__, "logs", filename)
 
         # Main NMPC loop
         for i in eachindex(t_vals)
