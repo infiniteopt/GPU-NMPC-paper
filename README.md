@@ -9,7 +9,7 @@ cd GPU-NMPC-paper
 mkdir -p \
     distillation/logs \
     pde/logs \
-    results/{Ipopt, MOI, ExaModelsCPU, ExaModelsGPU, MPCGPU}
+    results/{Ipopt,MOI,ExaModelsCPU,ExaModelsGPU,MPCGPU}
 ```
 
 ## Running the Julia Benchmarks
