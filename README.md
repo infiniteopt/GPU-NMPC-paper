@@ -15,6 +15,8 @@ mkdir -p \
 ## Running the Julia Benchmarks
 First, you'll need to install Julia (available at https://julialang.org/downloads/). Then to configure the required packages, create and instantiate a Julia environment using the `Project.toml` file as follows:
 ```julia
+julia> cd("GPU-NMPC-paper/")
+
 julia> ]
 
 (@v1.12) pkg> activate .
